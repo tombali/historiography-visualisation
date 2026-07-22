@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Extraction Relationship Graph</title>
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+  <style>
+    :root {
+      --bg: #12141a;
+      --panel: #1a1d26;
+      --border: #2a3040;
+      --text: #e8eaef;
+      --muted: #9aa3b5;
+      --accent: #5b9fd4;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      flex-wrap: wrap;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .file-btn {
+      position: relative;
+      overflow: hidden;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.4rem 0.85rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #242836;
+      color: var(--text);
+      font-size: 0.875rem;
+      cursor: pointer;
+    }
+
+    .file-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .file-btn input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    #filename {
+      color: var(--muted);
+      font-size: 0.85rem;
+      flex: 1;
+      min-width: 8rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #status {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    #status.error { color: #e07070; }
+
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      min-height: 0;
+    }
+
+    @media (max-width: 800px) {
+      main { grid-template-columns: 1fr; grid-template-rows: 55vh 1fr; }
+    }
+
+    #graph {
+      min-height: 0;
+      border-right: 1px solid var(--border);
+      background: #0e1015;
+    }
+
+    #graph.empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      font-size: 0.95rem;
+      text-align: center;
+      padding: 2rem;
+    }
+
+    aside {
+      overflow-y: auto;
+      padding: 1rem;
+      background: var(--panel);
+      font-size: 0.85rem;
+    }
+
+    aside h2 {
+      margin: 0 0 0.5rem;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    aside section {
+      margin-bottom: 1.25rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    aside section:last-child {
+      border-bottom: none;
+      margin-bottom: 0;
+    }
+
+    #summary {
+      line-height: 1.45;
+      color: var(--text);
+    }
+
+    #source {
+      color: var(--muted);
+      word-break: break-all;
+      font-size: 0.8rem;
+      margin-bottom: 0.75rem;
+    }
+
+    #dates {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    #dates li {
+      padding: 0.35rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    #dates li strong {
+      color: var(--text);
+      display: block;
+    }
+
+    .legend {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--muted);
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    #selection .label {
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+
+    #selection .name {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin: 0.15rem 0 0.5rem;
+    }
+
+    #selection .tag {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 3px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.75rem;
+    }
+
+    #selection ul {
+      margin: 0.35rem 0 0;
+      padding-left: 1.1rem;
+      color: var(--muted);
+    }
+
+    #selection li { margin: 0.25rem 0; }
+
+    .placeholder { color: var(--muted); font-style: italic; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Relationship graph</h1>
+    <label class="file-btn">
+      Load JSON…
+      <input type="file" id="fileInput" accept=".json,application/json" />
+    </label>
+    <span id="filename">Choose a file from output/</span>
+    <span id="status"></span>
+  </header>
+
+  <main>
+    <div id="graph" class="empty">
+      Drop an extraction JSON here, or use Load JSON…
+    </div>
+    <aside>
+      <section>
+        <h2>Document</h2>
+        <div id="source" class="placeholder">No file loaded</div>
+        <h2>Summary</h2>
+        <div id="summary" class="placeholder">—</div>
+      </section>
+      <section>
+        <h2>Dates</h2>
+        <ul id="dates"><li class="placeholder">—</li></ul>
+      </section>
+      <section>
+        <h2>Selected node</h2>
+        <div id="selection" class="placeholder">Click a node in the graph</div>
+      </section>
+      <section>
+        <h2>Legend</h2>
+        <div class="legend" id="legend"></div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    const TYPE_COLORS = {
+      PERSON: "#5b9fd4",
+      ORGANIZATION: "#6bbf8a",
+      LOCATION: "#e0b45a",
+      PRODUCT: "#c27bdb",
+      EVENT: "#e07a5f",
+      OTHER: "#8b93a7",
+    };
+
+    let network = null;
+    let currentData = null;
+    let nodeMeta = {};
+
+    const graphEl = document.getElementById("graph");
+    const fileInput = document.getElementById("fileInput");
+    const filenameEl = document.getElementById("filename");
+    const statusEl = document.getElementById("status");
+    const sourceEl = document.getElementById("source");
+    const summaryEl = document.getElementById("summary");
+    const datesEl = document.getElementById("dates");
+    const selectionEl = document.getElementById("selection");
+    const legendEl = document.getElementById("legend");
+
+    function buildLegend() {
+      legendEl.innerHTML = "";
+      for (const [type, color] of Object.entries(TYPE_COLORS)) {
+        const row = document.createElement("div");
+        row.className = "legend-item";
+        row.innerHTML = `<span class="legend-dot" style="background:${color}"></span>${type}`;
+        legendEl.appendChild(row);
+      }
+    }
+
+    function setStatus(msg, isError) {
+      statusEl.textContent = msg || "";
+      statusEl.classList.toggle("error", !!isError);
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderSidePanel(data) {
+      const doc = data.document || {};
+      sourceEl.className = "";
+      sourceEl.textContent = doc.source || "(unknown source)";
+
+      summaryEl.className = "";
+      summaryEl.textContent = data.summary || "(no summary)";
+
+      datesEl.innerHTML = "";
+      const dates = data.dates || [];
+      if (!dates.length) {
+        datesEl.innerHTML = '<li class="placeholder">No dates</li>';
+      } else {
+        for (const d of dates) {
+          const li = document.createElement("li");
+          li.innerHTML =
+            `<strong>${escapeHtml(d.date || "")}</strong>` +
+            (d.normalized ? `<span>${escapeHtml(d.normalized)}</span> · ` : "") +
+            escapeHtml(d.description || "");
+          datesEl.appendChild(li);
+        }
+      }
+
+      selectionEl.className = "placeholder";
+      selectionEl.textContent = "Click a node in the graph";
+    }
+
+    function showNode(id) {
+      const meta = nodeMeta[id];
+      if (!meta) return;
+
+      const rels = (currentData.relationships || []).filter(
+        (r) => r.subject === id || r.object === id
+      );
+
+      let html =
+        `<div class="label">Entity</div>` +
+        `<div class="name">${escapeHtml(meta.name)}</div>` +
+        `<span class="tag" style="background:${TYPE_COLORS[meta.type] || TYPE_COLORS.OTHER}33;color:${TYPE_COLORS[meta.type] || TYPE_COLORS.OTHER}">${escapeHtml(meta.type)}</span>`;
+
+      if (meta.mentions && meta.mentions.length) {
+        html += `<div class="label">Mentions</div><ul>`;
+        for (const m of meta.mentions) {
+          html += `<li>${escapeHtml(m)}</li>`;
+        }
+        html += `</ul>`;
+      }
+
+      if (rels.length) {
+        html += `<div class="label" style="margin-top:0.75rem">Connections</div><ul>`;
+        for (const r of rels) {
+          const arrow =
+            r.subject === id
+              ? `→ ${escapeHtml(r.object)}`
+              : `← ${escapeHtml(r.subject)}`;
+          html += `<li><em>${escapeHtml(r.relation)}</em> ${arrow}`;
+          if (r.context) html += `<br/><span style="opacity:0.75">${escapeHtml(r.context)}</span>`;
+          html += `</li>`;
+        }
+        html += `</ul>`;
+      }
+
+      selectionEl.className = "";
+      selectionEl.innerHTML = html;
+    }
+
+    function buildGraph(data) {
+      const entities = data.entities || [];
+      const relationships = data.relationships || [];
+
+      nodeMeta = {};
+      const degree = {};
+
+      function ensureNode(name, type) {
+        if (!name) return;
+        if (!nodeMeta[name]) {
+          nodeMeta[name] = {
+            name,
+            type: type || "OTHER",
+            mentions: [],
+            fromEntity: false,
+          };
+        }
+        degree[name] = degree[name] || 0;
+      }
+
+      for (const e of entities) {
+        if (!e || !e.name) continue;
+        ensureNode(e.name, e.type || "OTHER");
+        nodeMeta[e.name].fromEntity = true;
+        nodeMeta[e.name].type = e.type || "OTHER";
+        nodeMeta[e.name].mentions = e.mentions || [];
+      }
+
+      for (const r of relationships) {
+        if (!r) continue;
+        ensureNode(r.subject, "OTHER");
+        ensureNode(r.object, "OTHER");
+        if (r.subject) degree[r.subject] = (degree[r.subject] || 0) + 1;
+        if (r.object) degree[r.object] = (degree[r.object] || 0) + 1;
+      }
+
+      const nodes = Object.keys(nodeMeta).map((id) => {
+        const meta = nodeMeta[id];
+        const deg = degree[id] || 0;
+        const size = 14 + Math.min(deg, 8) * 3;
+        const color = TYPE_COLORS[meta.type] || TYPE_COLORS.OTHER;
+        const label =
+          id.length > 36 ? id.slice(0, 34) + "…" : id;
+        return {
+          id,
+          label,
+          title: `${meta.name}\n${meta.type}${deg ? `\n${deg} connection(s)` : ""}`,
+          color: {
+            background: color,
+            border: "#9aa3b5",
+            highlight: { background: color, border: "#ffffff" },
+            hover: { background: color, border: "#ffffff" },
+          },
+          font: {
+            color: "#ffffff",
+            size: 12,
+            face: "Segoe UI",
+            strokeWidth: 1,
+            strokeColor: "#6b7280",
+          },
+          size,
+          shape: "dot",
+          borderWidth: 2,
+        };
+      });
+
+      // Group edges between the same pair of nodes so parallel relations
+      // get different curve amounts and their labels do not overlap.
+      const relList = relationships.filter((r) => r && r.subject && r.object);
+      const pairBuckets = new Map();
+      relList.forEach((r, i) => {
+        const key =
+          r.subject < r.object
+            ? `${r.subject}\0${r.object}`
+            : `${r.object}\0${r.subject}`;
+        if (!pairBuckets.has(key)) pairBuckets.set(key, []);
+        pairBuckets.get(key).push({ r, i });
+      });
+
+      const edges = [];
+      for (const items of pairBuckets.values()) {
+        const n = items.length;
+        items.forEach(({ r, i }, idx) => {
+          let smooth;
+          if (n === 1) {
+            smooth = { enabled: true, type: "dynamic" };
+          } else {
+            // Fan parallel edges onto separate arcs (CW / CCW).
+            const mid = (n - 1) / 2;
+            const offset = idx - mid;
+            const roundness = 0.18 + Math.abs(offset) * 0.22;
+            smooth = {
+              enabled: true,
+              type: offset < 0 ? "curvedCCW" : "curvedCW",
+              roundness,
+            };
+          }
+
+          edges.push({
+            id: `e${i}`,
+            from: r.subject,
+            to: r.object,
+            label: r.relation || "",
+            title: r.context || r.relation || "",
+            arrows: "to",
+            color: { color: "#4a5266", highlight: "#5b9fd4" },
+            font: {
+              color: "#c5cad6",
+              size: 11,
+              align: "middle",
+              strokeWidth: 2,
+              strokeColor: "#0e1015",
+              vadjust: n > 1 ? Math.round((idx - (n - 1) / 2) * 4) : 0,
+            },
+            smooth,
+          });
+        });
+      }
+
+      return { nodes, edges };
+    }
+
+    function varAccent() {
+      return getComputedStyle(document.documentElement)
+        .getPropertyValue("--accent")
+        .trim() || "#5b9fd4";
+    }
+
+    function draw(data) {
+      currentData = data;
+      graphEl.classList.remove("empty");
+      graphEl.innerHTML = "";
+
+      const { nodes, edges } = buildGraph(data);
+      if (!nodes.length) {
+        graphEl.classList.add("empty");
+        graphEl.textContent = "No entities or relationships in this file.";
+        return;
+      }
+
+      const dataset = {
+        nodes: new vis.DataSet(nodes),
+        edges: new vis.DataSet(edges),
+      };
+
+      const options = {
+        nodes: {
+          scaling: { min: 12, max: 40 },
+          font: {
+            color: "#ffffff",
+            strokeWidth: 3,
+            strokeColor: "#6b7280",
+          },
+        },
+        edges: {
+          width: 1.5,
+          selectionWidth: 2.5,
+        },
+        physics: {
+          enabled: true,
+          solver: "forceAtlas2Based",
+          forceAtlas2Based: {
+            gravitationalConstant: -45,
+            centralGravity: 0.01,
+            springLength: 150,
+            springConstant: 0.06,
+            avoidOverlap: 0.8,
+          },
+          stabilization: { iterations: 120 },
+        },
+        interaction: {
+          hover: true,
+          tooltipDelay: 120,
+          navigationButtons: false,
+          keyboard: false,
+        },
+      };
+
+      if (network) {
+        network.destroy();
+        network = null;
+      }
+
+      network = new vis.Network(graphEl, dataset, options);
+      network.on("click", (params) => {
+        if (params.nodes.length) showNode(params.nodes[0]);
+      });
+
+      setStatus(`${nodes.length} nodes · ${edges.length} edges`);
+    }
+
+    function loadJsonText(text, name) {
+      try {
+        const data = JSON.parse(text);
+        if (data.error) {
+          setStatus("This looks like an .error.json file", true);
+        }
+        filenameEl.textContent = name || "loaded.json";
+        renderSidePanel(data);
+        draw(data);
+      } catch (e) {
+        setStatus("Invalid JSON: " + e.message, true);
+      }
+    }
+
+    function handleFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => loadJsonText(reader.result, file.name);
+      reader.onerror = () => setStatus("Could not read file", true);
+      reader.readAsText(file);
+    }
+
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files[0]) handleFile(fileInput.files[0]);
+    });
+
+    // Drag and drop onto the graph area
+    ["dragenter", "dragover"].forEach((evt) => {
+      graphEl.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        graphEl.style.outline = "1px dashed " + varAccent();
+      });
+    });
+    ["dragleave", "drop"].forEach((evt) => {
+      graphEl.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        graphEl.style.outline = "";
+      });
+    });
+    graphEl.addEventListener("drop", (e) => {
+      const file = e.dataTransfer.files[0];
+      if (file) handleFile(file);
+    });
+
+    buildLegend();
+  </script>
+</body>
+</html>

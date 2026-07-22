@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExtractionResult",
+  "description": "Structured entities/dates/relationships extracted from a local document (PDF, HTML, or text/Markdown) via the Claude API. Successful files in output/ follow this shape.",
+  "type": "object",
+  "required": ["document", "summary", "entities", "dates", "relationships", "warnings"],
+  "additionalProperties": false,
+  "properties": {
+    "document": {
+      "type": "object",
+      "description": "Deterministic metadata filled in by the pipeline, not by the LLM.",
+      "required": ["source", "format", "extracted_at"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "Local file path or URL the content was read from."
+        },
+        "format": {
+          "type": "string",
+          "enum": ["pdf", "html", "text"],
+          "description": "How the source was classified: 'pdf' (native document block), 'html' (local .html/.htm file, e.g. a saved web page), or 'text' (local .txt/.md/other text file)."
+        },
+        "extracted_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO-8601 UTC timestamp when extraction was run."
+        }
+      }
+    },
+    "summary": {
+      "type": ["string", "null"],
+      "description": "Optional 1-2 sentence summary of the document, supplied by the LLM."
+    },
+    "entities": {
+      "type": "array",
+      "description": "Named entities found in the document.",
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "type": {
+            "type": "string",
+            "enum": ["PERSON", "ORGANIZATION", "LOCATION", "PRODUCT", "EVENT", "OTHER"],
+            "description": "Unrecognized values reported by the LLM are coerced to OTHER by the validation layer (with a warning), not rejected."
+          },
+          "mentions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional list of alternate surface forms/mentions of this entity in the text."
+          }
+        }
+      }
+    },
+    "dates": {
+      "type": "array",
+      "description": "Dates/date expressions found in the document.",
+      "items": {
+        "type": "object",
+        "required": ["date", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "date": {"type": "string", "minLength": 1, "description": "The date exactly as it appears (or as paraphrased) in the source text."},
+          "normalized": {"type": ["string", "null"], "description": "Best-effort ISO-8601 (YYYY-MM-DD) normalization, or null if it cannot be determined."},
+          "description": {"type": "string", "description": "What this date refers to / its context."}
+        }
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "description": "Subject-relation-object triples found in the document.",
+      "items": {
+        "type": "object",
+        "required": ["subject", "relation", "object"],
+        "additionalProperties": false,
+        "properties": {
+          "subject": {"type": "string", "minLength": 1},
+          "relation": {"type": "string", "minLength": 1},
+          "object": {"type": "string", "minLength": 1},
+          "context": {"type": ["string", "null"], "description": "Optional supporting quote or paraphrase from the source."}
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Non-fatal issues recorded by the pipeline itself (truncation, coerced entity types, dropped malformed items, retry occurred, etc). Never written by the LLM directly."
+    }
+  }
+}
