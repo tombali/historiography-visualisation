@@ -1,6 +1,6 @@
 # historiography-visualisation
 
-Extracts entities, dates, and relationships from historiography documents (PDF/HTML/text) via the
+Extracts entities and relationships from historiography documents (PDF/HTML/text) via the
 Claude API, then visualizes them as an interactive graph.
 
 ## Usage

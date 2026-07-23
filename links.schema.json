@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CrossDocumentLinks",
+  "description": "Entities that appear in 2+ independently-extracted output/*.json documents, grouped by exact (normalized) name/mention match. Produced by link.py; not written by main.py.",
+  "type": "object",
+  "required": ["generated_at", "source_output_dir", "documents", "skipped_files", "ambiguous_local_matches", "groups"],
+  "additionalProperties": false,
+  "properties": {
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp when link.py was run."
+    },
+    "source_output_dir": {
+      "type": "string",
+      "description": "Directory that was scanned for ExtractionResult files (--output-dir)."
+    },
+    "documents": {
+      "type": "array",
+      "description": "Every ExtractionResult file actually included in this run, in path-sorted order.",
+      "items": {
+        "type": "object",
+        "required": ["id", "source", "entity_count"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Output filename stem (e.g. 'foo' for output/foo.json). Used as the document identifier throughout this file."
+          },
+          "source": { "type": "string", "description": "The document's document.source value (local file path the extraction was run against)." },
+          "entity_count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "skipped_files": {
+      "type": "array",
+      "description": "output/ files not ingested (*.error.json, invalid JSON, wrong shape, or a duplicate document.source superseded by a newer extraction), and why.",
+      "items": {
+        "type": "object",
+        "required": ["path", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    },
+    "ambiguous_local_matches": {
+      "type": "array",
+      "description": "Normalized surface forms that collided between two DIFFERENT entities within the SAME document (e.g. two people both aliased the same way). Excluded from all cross-document matching rather than arbitrarily assigned to one entity.",
+      "items": {
+        "type": "object",
+        "required": ["document", "surface_form", "entities"],
+        "additionalProperties": false,
+        "properties": {
+          "document": { "type": "string", "description": "Document id (see documents[].id) where the collision occurred." },
+          "surface_form": { "type": "string", "description": "The normalized (NFC, casefolded, whitespace-collapsed) form that was ambiguous." },
+          "entities": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 2,
+            "description": "Canonical names of the distinct entities that share this surface form."
+          }
+        }
+      }
+    },
+    "groups": {
+      "type": "array",
+      "description": "Shared-entity groups: each one real-world entity recurring across 2+ documents.",
+      "items": {
+        "type": "object",
+        "required": ["id", "representative_name", "representative_type", "type_conflict", "documents", "members", "link_evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "description": "Stable within this file only, e.g. 'group-0001'." },
+          "representative_name": {
+            "type": "string",
+            "description": "Deterministically chosen display name for the group: the longest member local_name, alphabetical tiebreak."
+          },
+          "representative_type": {
+            "type": "string",
+            "enum": ["PERSON", "ORGANIZATION", "LOCATION", "PRODUCT", "EVENT", "OTHER"],
+            "description": "The type shared by all members, or (if they disagree) the highest-priority type in PERSON/ORGANIZATION/LOCATION/PRODUCT/EVENT/OTHER order."
+          },
+          "type_conflict": {
+            "type": "boolean",
+            "description": "True if member documents disagree on this entity's type. Per-document types remain visible in `members` either way."
+          },
+          "documents": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 2,
+            "description": "Document ids (see documents[].id) spanned by this group, sorted."
+          },
+          "members": {
+            "type": "array",
+            "minItems": 2,
+            "description": "One entry per document contributing to this group, with that document's own local view of the entity.",
+            "items": {
+              "type": "object",
+              "required": ["document", "local_name", "local_type", "local_mentions"],
+              "additionalProperties": false,
+              "properties": {
+                "document": { "type": "string" },
+                "local_name": { "type": "string" },
+                "local_type": {
+                  "type": "string",
+                  "enum": ["PERSON", "ORGANIZATION", "LOCATION", "PRODUCT", "EVENT", "OTHER"]
+                },
+                "local_mentions": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "link_evidence": {
+            "type": "array",
+            "description": "The specific surface-form matches that connected this group's documents. Groups are transitive (union-find), so with chained matches this list may not include every pair of member documents directly — it records the actual matches, not the full derived closure.",
+            "items": {
+              "type": "object",
+              "required": ["surface_form", "documents"],
+              "additionalProperties": false,
+              "properties": {
+                "surface_form": {
+                  "type": "string",
+                  "description": "Normalized (NFC, casefolded, whitespace-collapsed) form shared between the two documents."
+                },
+                "documents": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -25,10 +25,10 @@ OUTPUT_DIR = "output"
 
 EXTRACTION_TOOL = {
     "name": "extract_structured_data",
-    "description": "Extract summary, entities, dates, and relationships from the document.",
+    "description": "Extract summary, entities, and relationships from the document.",
     "input_schema": {
         "type": "object",
-        "required": ["summary", "entities", "dates", "relationships"],
+        "required": ["summary", "entities", "relationships"],
         "properties": {
             "summary": {"type": "string"},
             "entities": {
@@ -43,18 +43,6 @@ EXTRACTION_TOOL = {
                             "enum": ["PERSON", "ORGANIZATION", "LOCATION", "PRODUCT", "EVENT", "OTHER"],
                         },
                         "mentions": {"type": "array", "items": {"type": "string"}},
-                    },
-                },
-            },
-            "dates": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["date", "description"],
-                    "properties": {
-                        "date": {"type": "string"},
-                        "normalized": {"type": ["string", "null"]},
-                        "description": {"type": "string"},
                     },
                 },
             },
@@ -76,23 +64,69 @@ EXTRACTION_TOOL = {
 }
 
 PROMPT = (
-    "Read the document and call extract_structured_data exactly once with:\n"
-    "- summary: 1-2 sentences\n"
-    "- entities: only the most important people, organizations, locations, products, "
-    "or events (max 20). Prefer names central to the article; skip routine bibliography "
-    "citations. type = PERSON, ORGANIZATION, LOCATION, PRODUCT, EVENT, or OTHER\n"
-    "- dates: only the most important dates (max 20), each with a short description and "
-    "normalized YYYY-MM-DD if known\n"
-    "- relationships: subject / relation / object triples (always include this field; "
-    "use [] if none)\n"
-    "Always include all four fields. Use empty lists when nothing is found. Do not invent facts."
+    "Read the document and call extract_structured_data exactly once. Determine entities first, "
+    "then relationships that only reference those entities — in that order.\n"
+    "\n"
+    "- summary: 1-2 sentences, neutral and factual, stating what the document is about.\n"
+    "\n"
+    "- entities: at most 20 total. If more than 20 are central to the document, keep only the 20 "
+    "most important and drop the rest — do not exceed 20 under any circumstance. The people, "
+    "organizations, locations, products, and events central to the document's content — not "
+    "routine bibliography citations. Always include every author named on the byline/title page "
+    "as a PERSON entity. type = PERSON, ORGANIZATION, LOCATION, PRODUCT, EVENT, or OTHER. Each "
+    "distinct real-world entity appears exactly once: pick one canonical `name` — its fullest/most "
+    "formal form, in whichever language the document is predominantly written in (fall back to "
+    "English only if the document mixes languages evenly enough that the main language is unclear) "
+    "— and put every other surface form it's called by, including the same entity's name in a "
+    "different language, in `mentions` rather than creating a second entity for it. List entities "
+    "in order of first appearance.\n"
+    "\n"
+    "- relationships: subject / relation / object triples (always include this field; use [] if "
+    "none). Only extract a relationship if it clearly falls into one of these categories, which "
+    "cover the kinds of connections that recur across historiographical scholarship generally (source "
+    "criticism, biography, archaeology, institutional/political history) — if a connection doesn't "
+    "fit any of them, leave it out rather than forcing it in:\n"
+    "  1. creation/authorship — wrote, composed, commissioned, minted, built, translated, edited\n"
+    "  2. affiliation — institutional, professional, or organizational membership\n"
+    "  3. provenance — discovered, found, or excavated at a place\n"
+    "  4. custody — currently held, owned, acquired, or exhibited by an institution\n"
+    "  5. depiction — depicts, portrays, symbolizes, or represents\n"
+    "  6. scholarly stance — interprets, critiques, supports, corrects, or builds on another's claim, "
+    "reading, or source\n"
+    "  7. identification — identified as, equated with, or the same entity as\n"
+    "  8. historical role — ruled, succeeded, held office, participated in, allied with, or opposed "
+    "(people, offices, events, polities)\n"
+    "  9. comparison — similar to, compared with, or contrasted with\n"
+    "  10. location — located in/near, moved to, part of\n"
+    "`subject` and `object` must be copied verbatim from an entity's canonical `name` above — never a "
+    "mention/alias or a shortened form, even if that's how the source text refers to it at that "
+    "point. Ground every relationship in the specific entity the sentence is actually about — never "
+    "substitute a related-but-different entity for it. A location IS a legitimate subject/object "
+    "outside categories 3/4/10 when the relationship is genuinely about the place itself — e.g. "
+    "identifying an ancient toponym with a modern place, or a polity ruling/acquiring territory, are "
+    "real historiographical claims and belong in the output like any other. What's never legitimate "
+    "is silently substituting a findspot or holding institution for the actual artifact/document being "
+    "discussed: a LOCATION must never be the subject/object of \"published\" or \"depicted on\" — "
+    "nothing is ever literally published on, or depicted on, a bare place, so seeing either of those "
+    "with a location means you've substituted the findspot for the artifact/document/person that was "
+    "actually published or depicted; go back and use that entity instead. Worked example: a seal "
+    "depicting a person was found in a village and is now held by a museum. Correct: \"person — "
+    "depicted on → seal\" (5), \"seal — found in → village\" (3), \"seal — held by → museum\" (4). "
+    "Wrong: \"person — depicted on → village\" — the village never depicted anyone; the seal did. "
+    "`relation` is a short (2-4 word) lowercase, active-voice verb phrase naming which "
+    "category applies (e.g. \"published\", \"critiques\", \"located in\") — phrase the same kind of "
+    "connection the same way every time it recurs. Never emit two relationships with the same "
+    "subject, relation, and object.\n"
+    "\n"
+    "Always include all three top-level fields, using [] for any list with nothing found. Use only "
+    "what is stated or directly implied by the text — do not invent facts."
 )
 
 REPAIR_PROMPT = (
     "Your previous tool call was incomplete or invalid: {reason}.\n"
-    "Call extract_structured_data again now. You MUST include summary, entities, dates, "
-    "and relationships (use [] for any list with no items). Keep entities/dates to the "
-    "most important ones (max 20 each)."
+    "Call extract_structured_data again now. You MUST include summary, entities, "
+    "and relationships (use [] for any list with no items). Keep entities to the "
+    "most important ones (max 20)."
 )
 
 
@@ -172,7 +206,7 @@ def normalize_lists(data):
     if not isinstance(data, dict):
         return data, warnings
 
-    for key in ("entities", "dates", "relationships"):
+    for key in ("entities", "relationships"):
         if key not in data or data[key] is None:
             data[key] = []
             warnings.append(f"missing `{key}` filled with empty list")
@@ -189,7 +223,7 @@ def validation_errors(data):
         return ["tool output is not a JSON object"]
 
     errors = []
-    for key in ("entities", "dates", "relationships"):
+    for key in ("entities", "relationships"):
         if not isinstance(data.get(key), list):
             errors.append(f"`{key}` must be a list")
 
@@ -201,10 +235,6 @@ def validation_errors(data):
         if not isinstance(item, dict) or "name" not in item or "type" not in item:
             errors.append(f"entities[{i}] needs name and type")
 
-    for i, item in enumerate(data["dates"]):
-        if not isinstance(item, dict) or "date" not in item:
-            errors.append(f"dates[{i}] needs date")
-
     for i, item in enumerate(data["relationships"]):
         if not isinstance(item, dict):
             errors.append(f"relationships[{i}] must be an object")
@@ -212,6 +242,61 @@ def validation_errors(data):
             errors.append(f"relationships[{i}] needs subject, relation, and object")
 
     return errors
+
+
+# Verbs that are never legitimately paired with a bare LOCATION in any genre: nothing
+# is ever literally "published on" or "depicted on" a place. Deliberately narrow —
+# things like "identified as", "interprets", or "acquired" are NOT included here
+# because a location can legitimately be the object of those (toponym identification,
+# a polity acquiring/ruling territory, etc. are real historiographical claims that
+# recur across the majority of historiographical works, not just this one).
+NEVER_LOCATION_RELATION_KEYWORDS = (
+    "publish",
+    "depict",
+)
+
+
+def location_conflation_warnings(data):
+    """
+    Heuristic backstop for a recurring model failure: pairing a LOCATION entity
+    (usually a findspot) with "published"/"depicted on" instead of the artifact or
+    document actually published/depicted — e.g. "museum -- acquired --> village"
+    written as "person -- depicted on --> village" instead of "-- depicted on -->
+    seal". Flags via a warning rather than dropping the relationship, since even
+    this narrow keyword check can have false positives.
+    """
+    if not isinstance(data, dict):
+        return []
+
+    types = {
+        e["name"]: e.get("type")
+        for e in data.get("entities", [])
+        if isinstance(e, dict) and e.get("name")
+    }
+
+    found = []
+    for r in data.get("relationships", []):
+        if not isinstance(r, dict):
+            continue
+        subject, relation, obj = r.get("subject"), r.get("relation"), r.get("object")
+        if not subject or not relation or not obj:
+            continue
+
+        location_side = subject if types.get(subject) == "LOCATION" else None
+        if location_side is None and types.get(obj) == "LOCATION":
+            location_side = obj
+        if location_side is None:
+            continue
+
+        if not any(kw in relation.lower() for kw in NEVER_LOCATION_RELATION_KEYWORDS):
+            continue
+
+        found.append(
+            f'possible artifact/findspot conflation: "{subject}" --{relation}--> "{obj}" '
+            f"pairs location `{location_side}` with \"{relation}\", which should name the "
+            f"artifact/document actually published or depicted, not its findspot"
+        )
+    return found
 
 
 def save_json(path, data):
@@ -235,6 +320,7 @@ def extract_one(client, content_block):
 
     errors = validation_errors(data)
     if not errors:
+        warnings.extend(location_conflation_warnings(data))
         return data, warnings, None
 
     # One repair retry with the specific validation reason.
@@ -249,6 +335,7 @@ def extract_one(client, content_block):
 
     errors = validation_errors(data)
     if not errors:
+        warnings.extend(location_conflation_warnings(data))
         return data, warnings, None
 
     return data, warnings, "; ".join(errors)
@@ -320,7 +407,6 @@ def main():
             },
             "summary": data.get("summary"),
             "entities": data["entities"],
-            "dates": data["dates"],
             "relationships": data["relationships"],
             "warnings": warnings,
         }
@@ -329,7 +415,6 @@ def main():
         ok_count += 1
         print(
             f"   OK: {len(result['entities'])} entities, "
-            f"{len(result['dates'])} dates, "
             f"{len(result['relationships'])} relationships"
         )
         if warnings:

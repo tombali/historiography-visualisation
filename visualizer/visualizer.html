@@ -151,23 +151,6 @@
       margin-bottom: 0.75rem;
     }
 
-    #dates {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-    }
-
-    #dates li {
-      padding: 0.35rem 0;
-      border-bottom: 1px solid var(--border);
-      color: var(--muted);
-    }
-
-    #dates li strong {
-      color: var(--text);
-      display: block;
-    }
-
     .legend {
       display: flex;
       flex-direction: column;
@@ -218,6 +201,95 @@
     #selection li { margin: 0.25rem 0; }
 
     .placeholder { color: var(--muted); font-style: italic; }
+
+    .file-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+    }
+
+    .file-item:last-child { border-bottom: none; }
+
+    .file-item-label {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+    }
+
+    .file-item.issue .file-item-label { color: #e07070; }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: inline-block;
+    }
+
+    .links-dot { background: #c5cad6; }
+
+    .remove-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 0 0.2rem;
+    }
+
+    .remove-btn:hover { color: #e07070; }
+
+    .clear-btn {
+      margin-top: 0.5rem;
+      padding: 0.3rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #242836;
+      color: var(--text);
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
+    .clear-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .file-notes {
+      margin-top: 0.5rem;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .file-notes div { padding: 0.2rem 0; }
+
+    .doc-row {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.2rem 0;
+    }
+
+    .doc-row .muted { color: var(--muted); font-size: 0.75rem; }
+
+    .doc-tag {
+      display: inline-block;
+      padding: 0.05rem 0.35rem;
+      border-radius: 3px;
+      font-size: 0.65rem;
+      color: #12141a;
+      font-weight: 600;
+      margin-right: 0.3rem;
+    }
   </style>
 </head>
 <body>
@@ -225,9 +297,9 @@
     <h1>Relationship graph</h1>
     <label class="file-btn">
       Load JSON…
-      <input type="file" id="fileInput" accept=".json,application/json" />
+      <input type="file" id="fileInput" accept=".json,application/json" multiple />
     </label>
-    <span id="filename">Choose a file from output/</span>
+    <span id="filename">Choose files from output/, plus optionally links/cross_document_links.json</span>
     <span id="status"></span>
   </header>
 
@@ -237,14 +309,16 @@
     </div>
     <aside>
       <section>
+        <h2>Loaded files</h2>
+        <ul id="fileList" class="file-list"><li class="placeholder">No files loaded</li></ul>
+        <div id="fileNotes" class="file-notes" hidden></div>
+        <button id="clearAllBtn" class="clear-btn" hidden>Clear all</button>
+      </section>
+      <section>
         <h2>Document</h2>
         <div id="source" class="placeholder">No file loaded</div>
         <h2>Summary</h2>
         <div id="summary" class="placeholder">—</div>
-      </section>
-      <section>
-        <h2>Dates</h2>
-        <ul id="dates"><li class="placeholder">—</li></ul>
       </section>
       <section>
         <h2>Selected node</h2>
@@ -253,6 +327,8 @@
       <section>
         <h2>Legend</h2>
         <div class="legend" id="legend"></div>
+        <h2 id="docLegendHeading" hidden>Documents</h2>
+        <div class="legend" id="docLegend" hidden></div>
       </section>
     </aside>
   </main>
@@ -267,9 +343,24 @@
       OTHER: "#8b93a7",
     };
 
+    const DOC_COLORS = ["#ff6b6b", "#4ecdc4", "#ffd93d", "#a78bfa", "#38bdf8", "#fb923c", "#34d399", "#f472b6"];
+    let usedColorSlots = new Array(DOC_COLORS.length).fill(false);
+
     let network = null;
-    let currentData = null;
+
+    let loadedDocs = new Map();       // docId -> {fileName, data, color, colorSlot}
+    let linksData = null;
+    let linksFileName = null;
+    let fileIssues = [];              // [{fileName, message}]
+    let loadNotices = [];             // transient messages from the last load batch
+
+    let resolvedGroups = new Map();   // groupId -> group
+    let memberIndex = new Map();      // "docId::localName" -> groupId
+    let unresolvedGroups = [];        // [{group, missing:[docId,...]}]
+    let linksNoOverlap = false;
+
     let nodeMeta = {};
+    let resolvedEdges = [];
 
     const graphEl = document.getElementById("graph");
     const fileInput = document.getElementById("fileInput");
@@ -277,9 +368,11 @@
     const statusEl = document.getElementById("status");
     const sourceEl = document.getElementById("source");
     const summaryEl = document.getElementById("summary");
-    const datesEl = document.getElementById("dates");
     const selectionEl = document.getElementById("selection");
     const legendEl = document.getElementById("legend");
+    const fileListEl = document.getElementById("fileList");
+    const fileNotesEl = document.getElementById("fileNotes");
+    const clearAllBtn = document.getElementById("clearAllBtn");
 
     function buildLegend() {
       legendEl.innerHTML = "";
@@ -304,124 +397,271 @@
         .replace(/"/g, "&quot;");
     }
 
-    function renderSidePanel(data) {
-      const doc = data.document || {};
-      sourceEl.className = "";
-      sourceEl.textContent = doc.source || "(unknown source)";
+    function deriveDocId(fileName) {
+      return fileName.replace(/\.json$/i, "");
+    }
 
-      summaryEl.className = "";
-      summaryEl.textContent = data.summary || "(no summary)";
+    function classifyFile(data) {
+      if (data && typeof data === "object" && data.error) return "error-json";
+      if (data && typeof data === "object" && data.document && Array.isArray(data.entities)) return "extraction";
+      if (
+        data && typeof data === "object" &&
+        Array.isArray(data.groups) && Array.isArray(data.documents) && Array.isArray(data.ambiguous_local_matches)
+      ) return "links";
+      return "unknown";
+    }
 
-      datesEl.innerHTML = "";
-      const dates = data.dates || [];
-      if (!dates.length) {
-        datesEl.innerHTML = '<li class="placeholder">No dates</li>';
+    function assignDocColor() {
+      let idx = usedColorSlots.findIndex((used) => !used);
+      if (idx === -1) {
+        return { color: DOC_COLORS[loadedDocs.size % DOC_COLORS.length], slot: null };
+      }
+      usedColorSlots[idx] = true;
+      return { color: DOC_COLORS[idx], slot: idx };
+    }
+
+    function freeDocColor(slot) {
+      if (slot != null && slot < usedColorSlots.length) usedColorSlots[slot] = false;
+    }
+
+    function readFileAsText(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error || new Error("could not read file"));
+        reader.readAsText(file);
+      });
+    }
+
+    function ingestExtraction(fileName, data, notices) {
+      const docId = deriveDocId(fileName);
+      if (loadedDocs.has(docId)) {
+        const existing = loadedDocs.get(docId);
+        loadedDocs.set(docId, { fileName, data, color: existing.color, colorSlot: existing.colorSlot });
+        notices.push(`Replaced previously loaded '${docId}' with '${fileName}'.`);
       } else {
-        for (const d of dates) {
-          const li = document.createElement("li");
-          li.innerHTML =
-            `<strong>${escapeHtml(d.date || "")}</strong>` +
-            (d.normalized ? `<span>${escapeHtml(d.normalized)}</span> · ` : "") +
-            escapeHtml(d.description || "");
-          datesEl.appendChild(li);
-        }
+        const { color, slot } = assignDocColor();
+        loadedDocs.set(docId, { fileName, data, color, colorSlot: slot });
       }
-
-      selectionEl.className = "placeholder";
-      selectionEl.textContent = "Click a node in the graph";
     }
 
-    function showNode(id) {
-      const meta = nodeMeta[id];
-      if (!meta) return;
-
-      const rels = (currentData.relationships || []).filter(
-        (r) => r.subject === id || r.object === id
-      );
-
-      let html =
-        `<div class="label">Entity</div>` +
-        `<div class="name">${escapeHtml(meta.name)}</div>` +
-        `<span class="tag" style="background:${TYPE_COLORS[meta.type] || TYPE_COLORS.OTHER}33;color:${TYPE_COLORS[meta.type] || TYPE_COLORS.OTHER}">${escapeHtml(meta.type)}</span>`;
-
-      if (meta.mentions && meta.mentions.length) {
-        html += `<div class="label">Mentions</div><ul>`;
-        for (const m of meta.mentions) {
-          html += `<li>${escapeHtml(m)}</li>`;
-        }
-        html += `</ul>`;
+    function ingestLinks(fileName, data, notices) {
+      if (linksData) {
+        notices.push(`A links file is already loaded ('${linksFileName}'); remove it before loading another.`);
+        return;
       }
-
-      if (rels.length) {
-        html += `<div class="label" style="margin-top:0.75rem">Connections</div><ul>`;
-        for (const r of rels) {
-          const arrow =
-            r.subject === id
-              ? `→ ${escapeHtml(r.object)}`
-              : `← ${escapeHtml(r.subject)}`;
-          html += `<li><em>${escapeHtml(r.relation)}</em> ${arrow}`;
-          if (r.context) html += `<br/><span style="opacity:0.75">${escapeHtml(r.context)}</span>`;
-          html += `</li>`;
-        }
-        html += `</ul>`;
-      }
-
-      selectionEl.className = "";
-      selectionEl.innerHTML = html;
+      linksData = data;
+      linksFileName = fileName;
     }
 
-    function buildGraph(data) {
-      const entities = data.entities || [];
-      const relationships = data.relationships || [];
+    async function handleFiles(fileList) {
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
 
+      const notices = [];
+      for (const file of files) {
+        let text;
+        try {
+          text = await readFileAsText(file);
+        } catch (e) {
+          fileIssues.push({ fileName: file.name, message: `Could not read file (${e.message || e})` });
+          continue;
+        }
+
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          fileIssues.push({ fileName: file.name, message: `Invalid JSON: ${e.message}` });
+          continue;
+        }
+
+        const kind = classifyFile(data);
+        if (kind === "extraction") {
+          ingestExtraction(file.name, data, notices);
+        } else if (kind === "links") {
+          ingestLinks(file.name, data, notices);
+        } else if (kind === "error-json") {
+          fileIssues.push({ fileName: file.name, message: "This looks like an .error.json file (extraction failed)" });
+        } else {
+          fileIssues.push({ fileName: file.name, message: "Unrecognized JSON shape" });
+        }
+      }
+
+      loadNotices = notices;
+      refresh();
+    }
+
+    function removeDoc(docId) {
+      const entry = loadedDocs.get(docId);
+      if (entry) freeDocColor(entry.colorSlot);
+      loadedDocs.delete(docId);
+      loadNotices = [];
+      refresh();
+    }
+
+    function removeLinks() {
+      linksData = null;
+      linksFileName = null;
+      loadNotices = [];
+      refresh();
+    }
+
+    function removeIssue(index) {
+      fileIssues.splice(index, 1);
+      refresh();
+    }
+
+    function clearAll() {
+      loadedDocs.clear();
+      usedColorSlots.fill(false);
+      linksData = null;
+      linksFileName = null;
+      fileIssues = [];
+      loadNotices = [];
+      refresh();
+    }
+
+    function recomputeGroups() {
+      resolvedGroups = new Map();
+      memberIndex = new Map();
+      unresolvedGroups = [];
+      linksNoOverlap = false;
+
+      if (!linksData) return;
+
+      for (const g of linksData.groups || []) {
+        const memberDocs = g.documents || [];
+        const present = memberDocs.filter((d) => loadedDocs.has(d));
+        if (memberDocs.length > 0 && present.length === memberDocs.length) {
+          resolvedGroups.set(g.id, g);
+          for (const m of g.members || []) {
+            memberIndex.set(m.document + "::" + m.local_name, g.id);
+          }
+        } else if (present.length > 0) {
+          unresolvedGroups.push({ group: g, missing: memberDocs.filter((d) => !loadedDocs.has(d)) });
+        }
+      }
+
+      if (loadedDocs.size > 0 && (linksData.documents || []).length > 0) {
+        linksNoOverlap = !(linksData.documents || []).some((d) => loadedDocs.has(d.id));
+      }
+    }
+
+    function nodeIdFor(docId, entityName) {
+      const groupId = memberIndex.get(docId + "::" + entityName);
+      return groupId ? "group:" + groupId : "doc:" + docId + "::" + entityName;
+    }
+
+    function buildGraph() {
       nodeMeta = {};
+      resolvedEdges = [];
       const degree = {};
 
-      function ensureNode(name, type) {
-        if (!name) return;
-        if (!nodeMeta[name]) {
-          nodeMeta[name] = {
-            name,
+      function ensureNode(nodeId, docId, localName, type) {
+        if (!nodeMeta[nodeId]) {
+          nodeMeta[nodeId] = {
+            name: localName,
             type: type || "OTHER",
             mentions: [],
             fromEntity: false,
+            isGroup: nodeId.startsWith("group:"),
+            members: [],
           };
         }
-        degree[name] = degree[name] || 0;
+        degree[nodeId] = degree[nodeId] || 0;
+        const meta = nodeMeta[nodeId];
+        if (!meta.members.some((m) => m.docId === docId && m.localName === localName)) {
+          meta.members.push({ docId, localName, localType: type || "OTHER", localMentions: [] });
+        }
+        return meta;
       }
 
-      for (const e of entities) {
-        if (!e || !e.name) continue;
-        ensureNode(e.name, e.type || "OTHER");
-        nodeMeta[e.name].fromEntity = true;
-        nodeMeta[e.name].type = e.type || "OTHER";
-        nodeMeta[e.name].mentions = e.mentions || [];
+      for (const [docId, doc] of loadedDocs) {
+        for (const e of doc.data.entities || []) {
+          if (!e || !e.name) continue;
+          const nodeId = nodeIdFor(docId, e.name);
+          const meta = ensureNode(nodeId, docId, e.name, e.type || "OTHER");
+          meta.fromEntity = true;
+
+          const group = meta.isGroup ? resolvedGroups.get(nodeId.slice(6)) : null;
+          meta.name = group ? group.representative_name : e.name;
+          meta.type = group ? group.representative_type : (e.type || "OTHER");
+
+          const newMentions = e.mentions || [];
+          for (const m of newMentions) if (!meta.mentions.includes(m)) meta.mentions.push(m);
+
+          const member = meta.members.find((m) => m.docId === docId && m.localName === e.name);
+          if (member) {
+            member.localType = e.type || "OTHER";
+            member.localMentions = newMentions;
+          }
+        }
       }
 
-      for (const r of relationships) {
-        if (!r) continue;
-        ensureNode(r.subject, "OTHER");
-        ensureNode(r.object, "OTHER");
-        if (r.subject) degree[r.subject] = (degree[r.subject] || 0) + 1;
-        if (r.object) degree[r.object] = (degree[r.object] || 0) + 1;
+      let edgeIndex = 0;
+      for (const [docId, doc] of loadedDocs) {
+        for (const r of doc.data.relationships || []) {
+          if (!r) continue;
+          const fromId = r.subject ? nodeIdFor(docId, r.subject) : null;
+          const toId = r.object ? nodeIdFor(docId, r.object) : null;
+          if (fromId) {
+            ensureNode(fromId, docId, r.subject, "OTHER");
+            degree[fromId] = (degree[fromId] || 0) + 1;
+          }
+          if (toId) {
+            ensureNode(toId, docId, r.object, "OTHER");
+            degree[toId] = (degree[toId] || 0) + 1;
+          }
+          if (fromId && toId) {
+            resolvedEdges.push({
+              edgeId: `e${edgeIndex++}`,
+              fromId,
+              toId,
+              relation: r.relation,
+              context: r.context,
+              docId,
+            });
+          }
+        }
       }
+
+      const multiDoc = loadedDocs.size > 1;
 
       const nodes = Object.keys(nodeMeta).map((id) => {
         const meta = nodeMeta[id];
         const deg = degree[id] || 0;
         const size = 14 + Math.min(deg, 8) * 3;
-        const color = TYPE_COLORS[meta.type] || TYPE_COLORS.OTHER;
-        const label =
-          id.length > 36 ? id.slice(0, 34) + "…" : id;
+        const fillColor = TYPE_COLORS[meta.type] || TYPE_COLORS.OTHER;
+        const label = meta.name.length > 36 ? meta.name.slice(0, 34) + "…" : meta.name;
+
+        let borderColor = "#9aa3b5";
+        let borderWidth = 2;
+        if (multiDoc) {
+          if (meta.isGroup) {
+            borderColor = "#ffffff";
+            borderWidth = 3;
+          } else if (meta.members.length) {
+            const ownerDoc = loadedDocs.get(meta.members[0].docId);
+            if (ownerDoc) borderColor = ownerDoc.color;
+          }
+        }
+
+        let title = `${meta.name}\n${meta.type}${deg ? `\n${deg} connection(s)` : ""}`;
+        if (multiDoc && meta.isGroup) {
+          const docIds = [...new Set(meta.members.map((m) => m.docId))];
+          title += `\nAppears in: ${docIds.join(", ")}`;
+        }
+
         return {
           id,
           label,
-          title: `${meta.name}\n${meta.type}${deg ? `\n${deg} connection(s)` : ""}`,
+          title,
           color: {
-            background: color,
-            border: "#9aa3b5",
-            highlight: { background: color, border: "#ffffff" },
-            hover: { background: color, border: "#ffffff" },
+            background: fillColor,
+            border: borderColor,
+            highlight: { background: fillColor, border: "#ffffff" },
+            hover: { background: fillColor, border: "#ffffff" },
           },
           font: {
             color: "#ffffff",
@@ -432,19 +672,16 @@
           },
           size,
           shape: "dot",
-          borderWidth: 2,
+          borderWidth,
         };
       });
 
-      // Group edges between the same pair of nodes so parallel relations
-      // get different curve amounts and their labels do not overlap.
-      const relList = relationships.filter((r) => r && r.subject && r.object);
       const pairBuckets = new Map();
-      relList.forEach((r, i) => {
+      resolvedEdges.forEach((r, i) => {
         const key =
-          r.subject < r.object
-            ? `${r.subject}\0${r.object}`
-            : `${r.object}\0${r.subject}`;
+          r.fromId < r.toId
+            ? `${r.fromId}::${r.toId}`
+            : `${r.toId}::${r.fromId}`;
         if (!pairBuckets.has(key)) pairBuckets.set(key, []);
         pairBuckets.get(key).push({ r, i });
       });
@@ -452,12 +689,11 @@
       const edges = [];
       for (const items of pairBuckets.values()) {
         const n = items.length;
-        items.forEach(({ r, i }, idx) => {
+        items.forEach(({ r }, idx) => {
           let smooth;
           if (n === 1) {
             smooth = { enabled: true, type: "dynamic" };
           } else {
-            // Fan parallel edges onto separate arcs (CW / CCW).
             const mid = (n - 1) / 2;
             const offset = idx - mid;
             const roundness = 0.18 + Math.abs(offset) * 0.22;
@@ -468,12 +704,14 @@
             };
           }
 
+          const title = (multiDoc ? `[${r.docId}] ` : "") + (r.context || r.relation || "");
+
           edges.push({
-            id: `e${i}`,
-            from: r.subject,
-            to: r.object,
+            id: r.edgeId,
+            from: r.fromId,
+            to: r.toId,
             label: r.relation || "",
-            title: r.context || r.relation || "",
+            title,
             arrows: "to",
             color: { color: "#4a5266", highlight: "#5b9fd4" },
             font: {
@@ -485,6 +723,7 @@
               vadjust: n > 1 ? Math.round((idx - (n - 1) / 2) * 4) : 0,
             },
             smooth,
+            docId: r.docId,
           });
         });
       }
@@ -498,15 +737,19 @@
         .trim() || "#5b9fd4";
     }
 
-    function draw(data) {
-      currentData = data;
+    function drawGraph(nodes, edges) {
       graphEl.classList.remove("empty");
       graphEl.innerHTML = "";
 
-      const { nodes, edges } = buildGraph(data);
       if (!nodes.length) {
         graphEl.classList.add("empty");
-        graphEl.textContent = "No entities or relationships in this file.";
+        graphEl.textContent = loadedDocs.size
+          ? "No entities or relationships to show for the loaded file(s)."
+          : "Drop an extraction JSON here, or use Load JSON…";
+        if (network) {
+          network.destroy();
+          network = null;
+        }
         return;
       }
 
@@ -557,37 +800,267 @@
       network.on("click", (params) => {
         if (params.nodes.length) showNode(params.nodes[0]);
       });
-
-      setStatus(`${nodes.length} nodes · ${edges.length} edges`);
     }
 
-    function loadJsonText(text, name) {
-      try {
-        const data = JSON.parse(text);
-        if (data.error) {
-          setStatus("This looks like an .error.json file", true);
+    function showNode(id) {
+      const meta = nodeMeta[id];
+      if (!meta) return;
+
+      const multiDoc = loadedDocs.size > 1;
+      const rels = resolvedEdges.filter((r) => r.fromId === id || r.toId === id);
+
+      let html =
+        `<div class="label">Entity</div>` +
+        `<div class="name">${escapeHtml(meta.name)}</div>` +
+        `<span class="tag" style="background:${TYPE_COLORS[meta.type] || TYPE_COLORS.OTHER}33;color:${TYPE_COLORS[meta.type] || TYPE_COLORS.OTHER}">${escapeHtml(meta.type)}</span>`;
+
+      if (meta.mentions && meta.mentions.length) {
+        html += `<div class="label">Mentions</div><ul>`;
+        for (const m of meta.mentions) {
+          html += `<li>${escapeHtml(m)}</li>`;
         }
-        filenameEl.textContent = name || "loaded.json";
-        renderSidePanel(data);
-        draw(data);
-      } catch (e) {
-        setStatus("Invalid JSON: " + e.message, true);
+        html += `</ul>`;
+      }
+
+      if (multiDoc && meta.isGroup && meta.members.length) {
+        html += `<div class="label" style="margin-top:0.75rem">Appears in</div><ul>`;
+        for (const m of meta.members) {
+          const color = (loadedDocs.get(m.docId) || {}).color || "#8b93a7";
+          html += `<li><span class="dot" style="background:${color}"></span> <strong>${escapeHtml(m.docId)}</strong>: ${escapeHtml(m.localName)} <em>(${escapeHtml(m.localType)})</em></li>`;
+        }
+        html += `</ul>`;
+      }
+
+      if (rels.length) {
+        html += `<div class="label" style="margin-top:0.75rem">Connections</div><ul>`;
+        for (const r of rels) {
+          const otherId = r.fromId === id ? r.toId : r.fromId;
+          const otherName = (nodeMeta[otherId] || {}).name || otherId;
+          const arrow = r.fromId === id ? `→ ${escapeHtml(otherName)}` : `← ${escapeHtml(otherName)}`;
+          const docTag = multiDoc
+            ? `<span class="doc-tag" style="background:${(loadedDocs.get(r.docId) || {}).color || "#8b93a7"}">${escapeHtml(r.docId)}</span> `
+            : "";
+          html += `<li>${docTag}<em>${escapeHtml(r.relation || "")}</em> ${arrow}`;
+          if (r.context) html += `<br/><span style="opacity:0.75">${escapeHtml(r.context)}</span>`;
+          html += `</li>`;
+        }
+        html += `</ul>`;
+      }
+
+      selectionEl.className = "";
+      selectionEl.innerHTML = html;
+    }
+
+    function renderSidePanel() {
+      selectionEl.className = "placeholder";
+      selectionEl.textContent = "Click a node in the graph";
+
+      if (loadedDocs.size === 0) {
+        sourceEl.className = "placeholder";
+        sourceEl.textContent = "No file loaded";
+        summaryEl.className = "placeholder";
+        summaryEl.textContent = "—";
+        return;
+      }
+
+      if (loadedDocs.size === 1) {
+        const doc = Array.from(loadedDocs.values())[0];
+        const data = doc.data;
+
+        sourceEl.className = "";
+        sourceEl.textContent = (data.document && data.document.source) || "(unknown source)";
+
+        summaryEl.className = "";
+        summaryEl.textContent = data.summary || "(no summary)";
+        return;
+      }
+
+      sourceEl.className = "";
+      sourceEl.innerHTML = "";
+      summaryEl.className = "";
+      summaryEl.innerHTML = "";
+
+      for (const [docId, doc] of loadedDocs) {
+        const data = doc.data;
+
+        const srcRow = document.createElement("div");
+        srcRow.className = "doc-row";
+        srcRow.innerHTML = `<span class="dot" style="background:${doc.color}"></span><strong>${escapeHtml(docId)}</strong> <span class="muted">${escapeHtml((data.document && data.document.source) || "")}</span>`;
+        sourceEl.appendChild(srcRow);
+
+        const sumRow = document.createElement("div");
+        sumRow.className = "doc-row";
+        sumRow.innerHTML = `<span class="dot" style="background:${doc.color}"></span><strong>${escapeHtml(docId)}:</strong> ${escapeHtml(data.summary || "(no summary)")}`;
+        summaryEl.appendChild(sumRow);
       }
     }
 
-    function handleFile(file) {
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => loadJsonText(reader.result, file.name);
-      reader.onerror = () => setStatus("Could not read file", true);
-      reader.readAsText(file);
+    function renderFileList() {
+      fileListEl.innerHTML = "";
+
+      for (const [docId, doc] of loadedDocs) {
+        const li = document.createElement("li");
+        li.className = "file-item";
+
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        dot.style.background = doc.color;
+
+        const label = document.createElement("span");
+        label.className = "file-item-label";
+        label.textContent = `${docId} (${(doc.data.entities || []).length} entities)`;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "remove-btn";
+        removeBtn.textContent = "×";
+        removeBtn.title = "Remove";
+        removeBtn.addEventListener("click", () => removeDoc(docId));
+
+        li.appendChild(dot);
+        li.appendChild(label);
+        li.appendChild(removeBtn);
+        fileListEl.appendChild(li);
+      }
+
+      if (linksData) {
+        const li = document.createElement("li");
+        li.className = "file-item";
+
+        const dot = document.createElement("span");
+        dot.className = "dot links-dot";
+
+        const counts = [];
+        if ((linksData.ambiguous_local_matches || []).length) counts.push(`${linksData.ambiguous_local_matches.length} ambiguous`);
+        if ((linksData.skipped_files || []).length) counts.push(`${linksData.skipped_files.length} skipped`);
+
+        const label = document.createElement("span");
+        label.className = "file-item-label";
+        label.textContent = linksFileName + (counts.length ? ` (${counts.join(", ")})` : "");
+
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "remove-btn";
+        removeBtn.textContent = "×";
+        removeBtn.title = "Remove";
+        removeBtn.addEventListener("click", () => removeLinks());
+
+        li.appendChild(dot);
+        li.appendChild(label);
+        li.appendChild(removeBtn);
+        fileListEl.appendChild(li);
+      }
+
+      fileIssues.forEach((issue, index) => {
+        const li = document.createElement("li");
+        li.className = "file-item issue";
+
+        const label = document.createElement("span");
+        label.className = "file-item-label";
+        label.textContent = `${issue.fileName}: ${issue.message}`;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "remove-btn";
+        removeBtn.textContent = "×";
+        removeBtn.title = "Dismiss";
+        removeBtn.addEventListener("click", () => removeIssue(index));
+
+        li.appendChild(label);
+        li.appendChild(removeBtn);
+        fileListEl.appendChild(li);
+      });
+
+      if (!loadedDocs.size && !linksData && !fileIssues.length) {
+        fileListEl.innerHTML = '<li class="placeholder">No files loaded</li>';
+      }
+
+      clearAllBtn.hidden = !(loadedDocs.size || linksData || fileIssues.length);
+
+      const lines = [];
+      if (loadNotices.length) lines.push(...loadNotices);
+      if (unresolvedGroups.length) {
+        const shown = unresolvedGroups
+          .slice(0, 5)
+          .map((u) => `${u.group.representative_name} (missing: ${u.missing.join(", ")})`);
+        let text = `${unresolvedGroups.length} link group(s) pending — ${shown.join("; ")}`;
+        if (unresolvedGroups.length > 5) text += `; +${unresolvedGroups.length - 5} more`;
+        lines.push(text);
+      }
+      if (linksNoOverlap) {
+        lines.push(`Links file covers ${(linksData.documents || []).length} document(s); none currently loaded.`);
+      }
+
+      fileNotesEl.innerHTML = "";
+      if (lines.length) {
+        fileNotesEl.hidden = false;
+        for (const line of lines) {
+          const div = document.createElement("div");
+          div.textContent = line;
+          fileNotesEl.appendChild(div);
+        }
+      } else {
+        fileNotesEl.hidden = true;
+      }
+    }
+
+    function updateHeaderFilename() {
+      if (!loadedDocs.size && !linksData) {
+        filenameEl.textContent = "Choose files from output/, plus optionally links/cross_document_links.json";
+        return;
+      }
+      let text = `${loadedDocs.size} document${loadedDocs.size === 1 ? "" : "s"}`;
+      if (linksData) text += " + links";
+      text += " loaded";
+      filenameEl.textContent = text;
+    }
+
+    function updateDocLegend() {
+      const heading = document.getElementById("docLegendHeading");
+      const legend = document.getElementById("docLegend");
+      if (loadedDocs.size < 2) {
+        heading.hidden = true;
+        legend.hidden = true;
+        legend.innerHTML = "";
+        return;
+      }
+      heading.hidden = false;
+      legend.hidden = false;
+      legend.innerHTML = "";
+      for (const [docId, doc] of loadedDocs) {
+        const row = document.createElement("div");
+        row.className = "legend-item";
+        row.innerHTML = `<span class="legend-dot" style="background:${doc.color}"></span>${escapeHtml(docId)}`;
+        legend.appendChild(row);
+      }
+    }
+
+    function updateStatus(nodeCount, edgeCount) {
+      const parts = [`${nodeCount} nodes`, `${edgeCount} edges`];
+      if (loadedDocs.size > 1) {
+        parts.push(`${loadedDocs.size} documents`);
+        if (linksData) parts.push(`${resolvedGroups.size} merged`);
+        if (unresolvedGroups.length) parts.push(`${unresolvedGroups.length} links pending`);
+      }
+      if (fileIssues.length) parts.push(`${fileIssues.length} failed to load`);
+      setStatus(parts.join(" · "), fileIssues.length > 0);
+    }
+
+    function refresh() {
+      recomputeGroups();
+      const { nodes, edges } = buildGraph();
+      renderFileList();
+      renderSidePanel();
+      updateHeaderFilename();
+      drawGraph(nodes, edges);
+      updateDocLegend();
+      updateStatus(nodes.length, edges.length);
     }
 
     fileInput.addEventListener("change", () => {
-      if (fileInput.files[0]) handleFile(fileInput.files[0]);
+      if (fileInput.files.length) handleFiles(fileInput.files);
+      fileInput.value = "";
     });
 
-    // Drag and drop onto the graph area
+    clearAllBtn.addEventListener("click", clearAll);
+
     ["dragenter", "dragover"].forEach((evt) => {
       graphEl.addEventListener(evt, (e) => {
         e.preventDefault();
@@ -603,8 +1076,7 @@
       });
     });
     graphEl.addEventListener("drop", (e) => {
-      const file = e.dataTransfer.files[0];
-      if (file) handleFile(file);
+      if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
     });
 
     buildLegend();
