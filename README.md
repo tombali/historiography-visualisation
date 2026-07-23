@@ -6,8 +6,7 @@ Claude API, then visualizes them as an interactive graph.
 ## Usage
 
 These steps assume you have [Python](https://www.python.org/downloads/) installed and know how
-to open a terminal (Command Prompt / PowerShell on Windows, Terminal on Mac) in this project's
-folder.
+to open a terminal in this project's folder.
 
 ### 1. Install the dependencies
 
@@ -29,10 +28,9 @@ The extraction is done by Claude, Anthropic's AI model, which requires an API ke
    exactly `.env`.
 3. Open it in any text editor and add one line:
    ```
-   ANTHROPIC_API_KEY=your-key-here
+   ANTHROPIC_API_KEY="your-key-here"
    ```
-   replacing `your-key-here` with your actual key. Keep this file private — never share it or
-   commit it to version control.
+   replacing `your-key-here` with your actual key. 
 
 ### 3. Add your documents
 
