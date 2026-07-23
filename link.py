@@ -4,12 +4,13 @@ Cross-document entity linking.
 Scans every ExtractionResult in output/, finds entities whose canonical name or any
 mention exactly matches (case/whitespace-insensitive, Unicode-normalized) a name or
 mention in another document, and groups them into shared-entity groups spanning 2+
-documents. Writes links/cross_document_links.json (shape: links.schema.json) fresh
-on each run. Does not touch output/ or anything main.py/eval.py write.
+documents. Writes output/cross_document_links.json (shape: links.schema.json) fresh
+on each run, alongside main.py's per-document files. Does not overwrite anything
+main.py writes.
 
 Usage:
   python link.py
-  python link.py --output-dir output --out links/cross_document_links.json
+  python link.py --out output/cross_document_links.json
 """
 
 import argparse
@@ -21,8 +22,7 @@ import unicodedata
 from datetime import datetime, timezone
 
 OUTPUT_DIR = "output"
-LINKS_DIR = "links"
-DEFAULT_OUT = os.path.join(LINKS_DIR, "cross_document_links.json")
+DEFAULT_OUT = os.path.join(OUTPUT_DIR, "cross_document_links.json")
 
 # Deterministic tiebreak order when member documents disagree on entity type.
 # Never used to gate matching, only to pick a representative type.
@@ -53,18 +53,23 @@ def is_extraction_result(data):
     )
 
 
-def load_extraction_results(output_dir):
+def load_extraction_results(output_dir, exclude_path=None):
     """
     Returns (docs, skipped).
     docs: list of {"id", "path", "source", "entities"} — one per usable output file,
           in path-sorted order.
     skipped: list of {"path", "reason"}.
+    exclude_path, if given, is left out of the scan entirely (used so link.py doesn't
+    read back its own previous output file, which now lives in the same directory it scans).
     """
     docs = []
     skipped = []
     by_source = {}  # source -> index into docs, to catch duplicate document.source
 
     paths = sorted(glob.glob(os.path.join(output_dir, "*.json")))
+    if exclude_path is not None:
+        exclude_path = os.path.normpath(exclude_path)
+        paths = [p for p in paths if os.path.normpath(p) != exclude_path]
 
     for path in paths:
         if path.endswith(".error.json"):
@@ -314,7 +319,6 @@ def save_json(path, data):
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--output-dir", default=OUTPUT_DIR, help=f"Directory of ExtractionResult JSON files (default: {OUTPUT_DIR})")
     p.add_argument("--out", default=DEFAULT_OUT, help=f"Where to write the cross-document links file (default: {DEFAULT_OUT})")
     return p.parse_args()
 
@@ -322,16 +326,16 @@ def parse_args():
 def main():
     args = parse_args()
 
-    docs, skipped = load_extraction_results(args.output_dir)
+    docs, skipped = load_extraction_results(OUTPUT_DIR, exclude_path=args.out)
     if len(docs) < 2:
-        print(f"Only {len(docs)} usable document(s) in '{args.output_dir}' — need at least 2 to find cross-document links.")
+        print(f"Only {len(docs)} usable document(s) in '{OUTPUT_DIR}' — need at least 2 to find cross-document links.")
 
     docs_by_id = {d["id"]: d for d in docs}
     form_index, ambiguous = build_form_index(docs)
     components, evidence = group_entities(form_index)
     groups = build_groups(docs_by_id, components, evidence)
 
-    result = build_output(docs, skipped, ambiguous, groups, args.output_dir)
+    result = build_output(docs, skipped, ambiguous, groups, OUTPUT_DIR)
     save_json(args.out, result)
 
     print(f"Scanned {len(docs)} document(s), skipped {len(skipped)}, found {len(groups)} shared-entity group(s).")

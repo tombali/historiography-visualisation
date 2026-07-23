@@ -13,7 +13,7 @@
     },
     "source_output_dir": {
       "type": "string",
-      "description": "Directory that was scanned for ExtractionResult files (--output-dir)."
+      "description": "Directory that was scanned for ExtractionResult files (always 'output')."
     },
     "documents": {
       "type": "array",

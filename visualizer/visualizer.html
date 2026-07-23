@@ -299,7 +299,7 @@
       Load JSON…
       <input type="file" id="fileInput" accept=".json,application/json" multiple />
     </label>
-    <span id="filename">Choose files from output/, plus optionally links/cross_document_links.json</span>
+    <span id="filename">Choose files from output/, plus optionally output/cross_document_links.json</span>
     <span id="status"></span>
   </header>
 
@@ -1003,7 +1003,7 @@
 
     function updateHeaderFilename() {
       if (!loadedDocs.size && !linksData) {
-        filenameEl.textContent = "Choose files from output/, plus optionally links/cross_document_links.json";
+        filenameEl.textContent = "Choose files from output/, plus optionally output/cross_document_links.json";
         return;
       }
       let text = `${loadedDocs.size} document${loadedDocs.size === 1 ? "" : "s"}`;
