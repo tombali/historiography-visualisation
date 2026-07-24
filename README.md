@@ -3,6 +3,8 @@
 Extracts entities and relationships from historiography documents (PDF/HTML/text) via the
 Claude API, then visualizes them as an interactive graph.
 
+![Graph example]([http://url/to/img.png](https://tomba.li/show/network.jpg))
+
 ## Usage
 
 These steps assume you have [Python](https://www.python.org/downloads/) installed and know how
