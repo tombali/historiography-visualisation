@@ -96,10 +96,45 @@
       main { grid-template-columns: 1fr; grid-template-rows: 55vh 1fr; }
     }
 
-    #graph {
+    .graph-wrap {
+      position: relative;
       min-height: 0;
       border-right: 1px solid var(--border);
+    }
+
+    #graph {
+      position: absolute;
+      inset: 0;
       background: #0e1015;
+    }
+
+    .floating-legend {
+      position: absolute;
+      left: 0.75rem;
+      bottom: 0.75rem;
+      z-index: 5;
+      max-width: 220px;
+      max-height: 40%;
+      overflow-y: auto;
+      padding: 0.75rem 0.9rem;
+      background: rgba(26, 29, 38, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      font-size: 0.85rem;
+    }
+
+    .floating-legend h2 {
+      margin: 0 0 0.5rem;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .floating-legend h2:not(:first-child) {
+      margin-top: 0.75rem;
     }
 
     #graph.empty {
@@ -137,18 +172,6 @@
     aside section:last-child {
       border-bottom: none;
       margin-bottom: 0;
-    }
-
-    #summary {
-      line-height: 1.45;
-      color: var(--text);
-    }
-
-    #source {
-      color: var(--muted);
-      word-break: break-all;
-      font-size: 0.8rem;
-      margin-bottom: 0.75rem;
     }
 
     .legend {
@@ -272,15 +295,6 @@
 
     .file-notes div { padding: 0.2rem 0; }
 
-    .doc-row {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      padding: 0.2rem 0;
-    }
-
-    .doc-row .muted { color: var(--muted); font-size: 0.75rem; }
-
     .doc-tag {
       display: inline-block;
       padding: 0.05rem 0.35rem;
@@ -289,6 +303,11 @@
       color: #12141a;
       font-weight: 600;
       margin-right: 0.3rem;
+    }
+
+    .page-tag {
+      color: var(--muted);
+      font-size: 0.75rem;
     }
   </style>
 </head>
@@ -304,8 +323,14 @@
   </header>
 
   <main>
-    <div id="graph" class="empty">
-      Drop an extraction JSON here, or use Load JSON…
+    <div class="graph-wrap">
+      <div id="graph" class="empty">
+        Drop an extraction JSON here, or use Load JSON…
+      </div>
+      <div class="floating-legend">
+        <h2>Legend</h2>
+        <div class="legend" id="legend"></div>
+      </div>
     </div>
     <aside>
       <section>
@@ -315,20 +340,8 @@
         <button id="clearAllBtn" class="clear-btn" hidden>Clear all</button>
       </section>
       <section>
-        <h2>Document</h2>
-        <div id="source" class="placeholder">No file loaded</div>
-        <h2>Summary</h2>
-        <div id="summary" class="placeholder">—</div>
-      </section>
-      <section>
         <h2>Selected node</h2>
         <div id="selection" class="placeholder">Click a node in the graph</div>
-      </section>
-      <section>
-        <h2>Legend</h2>
-        <div class="legend" id="legend"></div>
-        <h2 id="docLegendHeading" hidden>Documents</h2>
-        <div class="legend" id="docLegend" hidden></div>
       </section>
     </aside>
   </main>
@@ -366,8 +379,6 @@
     const fileInput = document.getElementById("fileInput");
     const filenameEl = document.getElementById("filename");
     const statusEl = document.getElementById("status");
-    const sourceEl = document.getElementById("source");
-    const summaryEl = document.getElementById("summary");
     const selectionEl = document.getElementById("selection");
     const legendEl = document.getElementById("legend");
     const fileListEl = document.getElementById("fileList");
@@ -395,6 +406,10 @@
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+
+    function normalizeMentionForm(s) {
+      return (s || "").normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
     }
 
     function deriveDocId(fileName) {
@@ -589,7 +604,23 @@
           meta.type = group ? group.representative_type : (e.type || "OTHER");
 
           const newMentions = e.mentions || [];
-          for (const m of newMentions) if (!meta.mentions.includes(m)) meta.mentions.push(m);
+          for (const m of newMentions) {
+            if (!m) continue;
+            const text = typeof m === "string" ? m : m.text;
+            const page = typeof m === "string" ? null : (m.page ?? null);
+            if (!text) continue;
+            const norm = normalizeMentionForm(text);
+            if (!norm) continue;
+            let entry = meta.mentions.find((existing) => normalizeMentionForm(existing.text) === norm);
+            if (!entry) {
+              entry = { text, pages: [] };
+              meta.mentions.push(entry);
+            }
+            if (page !== null && page !== undefined && !entry.pages.includes(page)) {
+              entry.pages.push(page);
+              entry.pages.sort((a, b) => a - b);
+            }
+          }
 
           const member = meta.members.find((m) => m.docId === docId && m.localName === e.name);
           if (member) {
@@ -620,6 +651,7 @@
               toId,
               relation: r.relation,
               context: r.context,
+              page: r.page,
               docId,
             });
           }
@@ -704,7 +736,8 @@
             };
           }
 
-          const title = (multiDoc ? `[${r.docId}] ` : "") + (r.context || r.relation || "");
+          const pageSuffix = r.page !== null && r.page !== undefined ? ` (p. ${r.page})` : "";
+          const title = (multiDoc ? `[${r.docId}] ` : "") + (r.context || r.relation || "") + pageSuffix;
 
           edges.push({
             id: r.edgeId,
@@ -817,7 +850,7 @@
       if (meta.mentions && meta.mentions.length) {
         html += `<div class="label">Mentions</div><ul>`;
         for (const m of meta.mentions) {
-          html += `<li>${escapeHtml(m)}</li>`;
+          html += `<li>${escapeHtml(m.text)}</li>`;
         }
         html += `</ul>`;
       }
@@ -840,8 +873,15 @@
           const docTag = multiDoc
             ? `<span class="doc-tag" style="background:${(loadedDocs.get(r.docId) || {}).color || "#8b93a7"}">${escapeHtml(r.docId)}</span> `
             : "";
+          const pageLabel = r.page !== null && r.page !== undefined
+            ? `<span class="page-tag">p. ${escapeHtml(String(r.page))}</span>`
+            : "";
           html += `<li>${docTag}<em>${escapeHtml(r.relation || "")}</em> ${arrow}`;
-          if (r.context) html += `<br/><span style="opacity:0.75">${escapeHtml(r.context)}</span>`;
+          if (r.context || pageLabel) {
+            const contextText = r.context ? escapeHtml(r.context) : "";
+            const sep = contextText && pageLabel ? ", " : "";
+            html += `<br/><span style="opacity:0.75">${contextText}${sep}${pageLabel}</span>`;
+          }
           html += `</li>`;
         }
         html += `</ul>`;
@@ -854,45 +894,6 @@
     function renderSidePanel() {
       selectionEl.className = "placeholder";
       selectionEl.textContent = "Click a node in the graph";
-
-      if (loadedDocs.size === 0) {
-        sourceEl.className = "placeholder";
-        sourceEl.textContent = "No file loaded";
-        summaryEl.className = "placeholder";
-        summaryEl.textContent = "—";
-        return;
-      }
-
-      if (loadedDocs.size === 1) {
-        const doc = Array.from(loadedDocs.values())[0];
-        const data = doc.data;
-
-        sourceEl.className = "";
-        sourceEl.textContent = (data.document && data.document.source) || "(unknown source)";
-
-        summaryEl.className = "";
-        summaryEl.textContent = data.summary || "(no summary)";
-        return;
-      }
-
-      sourceEl.className = "";
-      sourceEl.innerHTML = "";
-      summaryEl.className = "";
-      summaryEl.innerHTML = "";
-
-      for (const [docId, doc] of loadedDocs) {
-        const data = doc.data;
-
-        const srcRow = document.createElement("div");
-        srcRow.className = "doc-row";
-        srcRow.innerHTML = `<span class="dot" style="background:${doc.color}"></span><strong>${escapeHtml(docId)}</strong> <span class="muted">${escapeHtml((data.document && data.document.source) || "")}</span>`;
-        sourceEl.appendChild(srcRow);
-
-        const sumRow = document.createElement("div");
-        sumRow.className = "doc-row";
-        sumRow.innerHTML = `<span class="dot" style="background:${doc.color}"></span><strong>${escapeHtml(docId)}:</strong> ${escapeHtml(data.summary || "(no summary)")}`;
-        summaryEl.appendChild(sumRow);
-      }
     }
 
     function renderFileList() {
@@ -1012,26 +1013,6 @@
       filenameEl.textContent = text;
     }
 
-    function updateDocLegend() {
-      const heading = document.getElementById("docLegendHeading");
-      const legend = document.getElementById("docLegend");
-      if (loadedDocs.size < 2) {
-        heading.hidden = true;
-        legend.hidden = true;
-        legend.innerHTML = "";
-        return;
-      }
-      heading.hidden = false;
-      legend.hidden = false;
-      legend.innerHTML = "";
-      for (const [docId, doc] of loadedDocs) {
-        const row = document.createElement("div");
-        row.className = "legend-item";
-        row.innerHTML = `<span class="legend-dot" style="background:${doc.color}"></span>${escapeHtml(docId)}`;
-        legend.appendChild(row);
-      }
-    }
-
     function updateStatus(nodeCount, edgeCount) {
       const parts = [`${nodeCount} nodes`, `${edgeCount} edges`];
       if (loadedDocs.size > 1) {
@@ -1050,7 +1031,6 @@
       renderSidePanel();
       updateHeaderFilename();
       drawGraph(nodes, edges);
-      updateDocLegend();
       updateStatus(nodes.length, edges.length);
     }
 

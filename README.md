@@ -61,8 +61,10 @@ python link.py
 ```
 
 This looks through everything in `output/` and writes a summary of the shared entities to
-`output/cross_document_links.json`. You can skip this step if you're only interested in one
-document at a time.
+`output/cross_document_links.json`. It also flags entities with similar-but-not-quite-matching
+names across documents (e.g. a spelling variant) as `possible_matches` in that same file, for you
+to check by hand — these aren't merged automatically. You can skip this step if you're only
+interested in one document at a time.
 
 ### 6. View the results
 

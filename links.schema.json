@@ -1,9 +1,9 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "CrossDocumentLinks",
-  "description": "Entities that appear in 2+ independently-extracted output/*.json documents, grouped by exact (normalized) name/mention match. Produced by link.py; not written by main.py.",
+  "description": "Entities that appear in 2+ independently-extracted output/*.json documents, grouped by exact (normalized) name/mention match, plus similar-but-unmatched pairs flagged for manual review. Produced by link.py; not written by main.py.",
   "type": "object",
-  "required": ["generated_at", "source_output_dir", "documents", "skipped_files", "ambiguous_local_matches", "groups"],
+  "required": ["generated_at", "source_output_dir", "documents", "skipped_files", "ambiguous_local_matches", "groups", "possible_matches"],
   "additionalProperties": false,
   "properties": {
     "generated_at": {
@@ -107,7 +107,18 @@
                   "type": "string",
                   "enum": ["PERSON", "ORGANIZATION", "LOCATION", "PRODUCT", "EVENT", "OTHER"]
                 },
-                "local_mentions": { "type": "array", "items": { "type": "string" } }
+                "local_mentions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["text"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": { "type": "string" },
+                      "page": { "type": ["integer", "null"] }
+                    }
+                  }
+                }
               }
             }
           },
@@ -132,6 +143,40 @@
               }
             }
           }
+        }
+      }
+    },
+    "possible_matches": {
+      "type": "array",
+      "description": "Cross-document entity pairs whose canonical names are similar but not exactly matched (spelling/dialect/inflection variants, e.g. 'Ljetopis popa Dukljanina' vs 'Letopis Popa Dukljanina') — flagged for manual review, never merged into `groups`. Compares canonical names only (not mentions), only entities of the same type, and skips anything already linked via `groups`. Deduplicated to one highest-similarity example per distinct pair of already-linked components, sorted by descending similarity.",
+      "items": {
+        "type": "object",
+        "required": ["similarity", "a", "b"],
+        "additionalProperties": false,
+        "properties": {
+          "similarity": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "difflib.SequenceMatcher ratio on normalized (NFC, casefolded, whitespace-collapsed) canonical names."
+          },
+          "a": { "$ref": "#/definitions/possibleMatchSide" },
+          "b": { "$ref": "#/definitions/possibleMatchSide" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "possibleMatchSide": {
+      "type": "object",
+      "required": ["document", "name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "document": { "type": "string", "description": "Document id (see documents[].id)." },
+        "name": { "type": "string", "description": "The entity's canonical name in this document." },
+        "type": {
+          "type": "string",
+          "enum": ["PERSON", "ORGANIZATION", "LOCATION", "PRODUCT", "EVENT", "OTHER"]
         }
       }
     }

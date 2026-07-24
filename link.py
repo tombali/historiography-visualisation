@@ -4,7 +4,11 @@ Cross-document entity linking.
 Scans every ExtractionResult in output/, finds entities whose canonical name or any
 mention exactly matches (case/whitespace-insensitive, Unicode-normalized) a name or
 mention in another document, and groups them into shared-entity groups spanning 2+
-documents. Writes output/cross_document_links.json (shape: links.schema.json) fresh
+documents. Also flags cross-document entity pairs with similar-but-not-matching
+canonical names (spelling/dialect/inflection variants, e.g. "Ljetopis popa
+Dukljanina" vs "Letopis Popa Dukljanina") as `possible_matches`, for manual review —
+these are never auto-merged into `groups`, since exact matching is what keeps false
+merges out. Writes output/cross_document_links.json (shape: links.schema.json) fresh
 on each run, alongside main.py's per-document files. Does not overwrite anything
 main.py writes.
 
@@ -14,6 +18,7 @@ Usage:
 """
 
 import argparse
+import difflib
 import glob
 import json
 import os
@@ -27,6 +32,14 @@ DEFAULT_OUT = os.path.join(OUTPUT_DIR, "cross_document_links.json")
 # Deterministic tiebreak order when member documents disagree on entity type.
 # Never used to gate matching, only to pick a representative type.
 TYPE_PRIORITY = ["PERSON", "ORGANIZATION", "LOCATION", "PRODUCT", "EVENT", "OTHER"]
+
+# Minimum difflib.SequenceMatcher ratio (on normalized canonical names) for a
+# cross-document pair to be flagged as a possible match. Picked so a genuine
+# dialect/spelling variant ("ljetopis popa dukljanina" vs "letopis popa
+# dukljanina" -> 0.979) clears it with room to spare, while two different real
+# entities that just happen to share a lot of characters ("kingdom of croatia"
+# vs "kingdom of dalmatia" -> 0.811) stay below it.
+FUZZY_MATCH_THRESHOLD = 0.90
 
 
 # ---------------------------------------------------------------------------
@@ -123,9 +136,11 @@ def entity_surface_forms(entity):
     if name:
         forms.add(name)
     for m in entity.get("mentions") or []:
-        m = normalize_form(m)
-        if m:
-            forms.add(m)
+        # mentions are {"text", "page"} objects; older files may still have plain strings.
+        text = m.get("text") if isinstance(m, dict) else m
+        text = normalize_form(text)
+        if text:
+            forms.add(text)
     return forms
 
 
@@ -190,7 +205,9 @@ def group_entities(form_index):
     """
     Nodes = (doc_id, entity_idx). For each surface form present in >=2 distinct
     documents, union all its occurrences together.
-    Returns (components: dict[root -> list[node]], evidence: dict[root -> list of edges]).
+    Returns (components: dict[root -> list[node]], evidence: dict[root -> list of
+    edges], uf: the UnionFind instance — reused by find_possible_matches to skip
+    pairs that are already exactly matched).
 
     Evidence is bucketed by the FINAL union-find root reached after all unions are
     performed (a second pass, once the component shape is settled), not by which
@@ -223,7 +240,73 @@ def group_entities(form_index):
         for i in range(len(doc_ids) - 1):
             edges.append({"surface_form": form, "documents": [doc_ids[i], doc_ids[i + 1]]})
 
-    return components, evidence
+    return components, evidence, uf
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy candidates (not auto-merged — see module docstring)
+# ---------------------------------------------------------------------------
+
+def find_possible_matches(docs, uf, threshold=FUZZY_MATCH_THRESHOLD):
+    """
+    Flags cross-document entity pairs whose canonical names are similar but not
+    exactly matched (spelling/dialect/inflection variants) for manual review.
+    Never merged into `groups` — exact matching stays the only thing that actually
+    links entities, so this can't introduce a false-positive merge; it only adds
+    a suggestion to the output for a human to confirm or ignore.
+
+    Compares canonical `name` only (not mentions), and only entities of the same
+    type, across different documents, skipping pairs already in the same
+    exact-match component (per `uf.find`). Calling uf.find on a node it hasn't
+    seen yet is safe — UnionFind.find() lazily registers unseen nodes as their
+    own singleton root.
+
+    Pairs are deduplicated to the single highest-similarity example per distinct
+    pair of components, so if three documents already share an exact match and a
+    fourth has a spelling variant, that shows up once — not three times.
+    Returns a list sorted by descending similarity.
+    """
+    nodes = []
+    for doc in docs:
+        for idx, entity in enumerate(doc["entities"]):
+            if not isinstance(entity, dict):
+                continue
+            name = entity.get("name")
+            if not name:
+                continue
+            nodes.append({
+                "doc_id": doc["id"],
+                "idx": idx,
+                "name": name,
+                "type": entity.get("type", "OTHER"),
+                "norm": normalize_form(name),
+            })
+
+    best = {}
+    for i, a in enumerate(nodes):
+        for b in nodes[i + 1:]:
+            if a["doc_id"] == b["doc_id"] or a["type"] != b["type"]:
+                continue
+
+            root_a = uf.find((a["doc_id"], a["idx"]))
+            root_b = uf.find((b["doc_id"], b["idx"]))
+            if root_a == root_b:
+                continue
+
+            similarity = difflib.SequenceMatcher(None, a["norm"], b["norm"]).ratio()
+            if similarity < threshold:
+                continue
+
+            key = tuple(sorted([root_a, root_b]))
+            candidate = {
+                "similarity": round(similarity, 3),
+                "a": {"document": a["doc_id"], "name": a["name"], "type": a["type"]},
+                "b": {"document": b["doc_id"], "name": b["name"], "type": b["type"]},
+            }
+            if key not in best or candidate["similarity"] > best[key]["similarity"]:
+                best[key] = candidate
+
+    return sorted(best.values(), key=lambda c: -c["similarity"])
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +376,7 @@ def build_groups(docs_by_id, components, evidence):
 # Output
 # ---------------------------------------------------------------------------
 
-def build_output(docs, skipped, ambiguous, groups, output_dir):
+def build_output(docs, skipped, ambiguous, groups, possible_matches, output_dir):
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_output_dir": output_dir,
@@ -304,6 +387,7 @@ def build_output(docs, skipped, ambiguous, groups, output_dir):
         "skipped_files": skipped,
         "ambiguous_local_matches": ambiguous,
         "groups": groups,
+        "possible_matches": possible_matches,
     }
 
 
@@ -332,15 +416,18 @@ def main():
 
     docs_by_id = {d["id"]: d for d in docs}
     form_index, ambiguous = build_form_index(docs)
-    components, evidence = group_entities(form_index)
+    components, evidence, uf = group_entities(form_index)
     groups = build_groups(docs_by_id, components, evidence)
+    possible_matches = find_possible_matches(docs, uf)
 
-    result = build_output(docs, skipped, ambiguous, groups, OUTPUT_DIR)
+    result = build_output(docs, skipped, ambiguous, groups, possible_matches, OUTPUT_DIR)
     save_json(args.out, result)
 
     print(f"Scanned {len(docs)} document(s), skipped {len(skipped)}, found {len(groups)} shared-entity group(s).")
     if ambiguous:
         print(f"   {len(ambiguous)} ambiguous local surface form(s) excluded from matching (see ambiguous_local_matches).")
+    if possible_matches:
+        print(f"   {len(possible_matches)} possible cross-document match(es) flagged for review (see possible_matches).")
     print(f"-> {args.out}")
 
 

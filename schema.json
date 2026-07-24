@@ -48,8 +48,16 @@
           },
           "mentions": {
             "type": "array",
-            "items": {"type": "string"},
-            "description": "Optional list of alternate surface forms/mentions of this entity in the text."
+            "items": {
+              "type": "object",
+              "required": ["text"],
+              "additionalProperties": false,
+              "properties": {
+                "text": {"type": "string", "minLength": 1, "description": "The alternate surface form as it appears in the source."},
+                "page": {"type": ["integer", "null"], "description": "1-indexed page number within the PDF where this surface form appears, or null if the source has no pages or the page couldn't be determined."}
+              }
+            },
+            "description": "Optional list of alternate surface forms/mentions of this entity in the text, each tagged with the page it occurs on. The same text may appear more than once, once per page it's found on."
           }
         }
       }
@@ -65,7 +73,8 @@
           "subject": {"type": "string", "minLength": 1},
           "relation": {"type": "string", "minLength": 1},
           "object": {"type": "string", "minLength": 1},
-          "context": {"type": ["string", "null"], "description": "Optional supporting quote or paraphrase from the source."}
+          "context": {"type": ["string", "null"], "description": "Optional English paraphrase (not a verbatim quote) of the supporting textual evidence, always in English regardless of the source document's language."},
+          "page": {"type": ["integer", "null"], "description": "1-indexed page number within the PDF where this relationship is stated, or null if the source has no pages or the page couldn't be determined."}
         }
       }
     },

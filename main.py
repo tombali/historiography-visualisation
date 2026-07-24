@@ -42,7 +42,17 @@ EXTRACTION_TOOL = {
                             "type": "string",
                             "enum": ["PERSON", "ORGANIZATION", "LOCATION", "PRODUCT", "EVENT", "OTHER"],
                         },
-                        "mentions": {"type": "array", "items": {"type": "string"}},
+                        "mentions": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["text"],
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "page": {"type": ["integer", "null"]},
+                                },
+                            },
+                        },
                     },
                 },
             },
@@ -56,6 +66,7 @@ EXTRACTION_TOOL = {
                         "relation": {"type": "string"},
                         "object": {"type": "string"},
                         "context": {"type": ["string", "null"]},
+                        "page": {"type": ["integer", "null"]},
                     },
                 },
             },
@@ -78,8 +89,13 @@ PROMPT = (
     "formal form, in whichever language the document is predominantly written in (fall back to "
     "English only if the document mixes languages evenly enough that the main language is unclear) "
     "— and put every other surface form it's called by, including the same entity's name in a "
-    "different language, in `mentions` rather than creating a second entity for it. List entities "
-    "in order of first appearance.\n"
+    "different language, in `mentions` rather than creating a second entity for it. Each mention "
+    "is an object `{text, page}`: `text` is the surface form as it appears in the source, and "
+    "`page` is the 1-indexed page number within the PDF file where that surface form appears "
+    "(count pages from the start of the file itself, not any printed page number in a "
+    "header/footer) — use null if the source has no pages (HTML/plain text) or the page can't be "
+    "determined. If a surface form recurs on more than one page, list it once per page it occurs "
+    "on. List entities in order of first appearance.\n"
     "\n"
     "- relationships: subject / relation / object triples (always include this field; use [] if "
     "none). Only extract a relationship if it clearly falls into one of these categories, which "
@@ -113,10 +129,20 @@ PROMPT = (
     "depicting a person was found in a village and is now held by a museum. Correct: \"person — "
     "depicted on → seal\" (5), \"seal — found in → village\" (3), \"seal — held by → museum\" (4). "
     "Wrong: \"person — depicted on → village\" — the village never depicted anyone; the seal did. "
-    "`relation` is a short (2-4 word) lowercase, active-voice verb phrase naming which "
-    "category applies (e.g. \"published\", \"critiques\", \"located in\") — phrase the same kind of "
-    "connection the same way every time it recurs. Never emit two relationships with the same "
-    "subject, relation, and object.\n"
+    "`relation` is always in English, regardless of what language the document itself is written "
+    "in (unlike entity `name`/`mentions`, which follow the document's language) — a short (2-4 "
+    "word) lowercase, active-voice verb phrase naming which category applies (e.g. \"published\", "
+    "\"critiques\", \"located in\") — phrase the same kind of connection the same way every time "
+    "it recurs, in English, even across different documents. Never emit two relationships with the "
+    "same subject, relation, and object. Also include `context`: a one-sentence (<=25 words) "
+    "English paraphrase of the specific textual evidence for this relationship — always in "
+    "English, even when the source document is written in another language; translate the "
+    "substance rather than quoting the original-language sentence verbatim (a short original-"
+    "language term or title inside the English paraphrase is fine when useful), or null if "
+    "nothing concise fits. Also include `page`: the 1-indexed PDF page number (counted "
+    "the same way as for mentions above) where this relationship is stated — use the page with "
+    "the clearest evidence if the statement spans a page break, or null if the source has no "
+    "pages or the page can't be determined.\n"
     "\n"
     "Always include all three top-level fields, using [] for any list with nothing found. Use only "
     "what is stated or directly implied by the text — do not invent facts."
@@ -169,6 +195,11 @@ def load_file(path):
 
 def chat(client, content_block, extra_note=None):
     prompt = PROMPT if not extra_note else f"{extra_note}\n\n{PROMPT}"
+    # The document itself (often a multi-page PDF) is identical between the initial
+    # call and the repair retry — cache it so the retry doesn't reprocess it from
+    # scratch. content_block is copied rather than mutated since callers (e.g. eval.py)
+    # reuse the same dict across many chat() calls for the same file.
+    cached_block = {**content_block, "cache_control": {"type": "ephemeral"}}
     return client.messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
@@ -178,7 +209,7 @@ def chat(client, content_block, extra_note=None):
             {
                 "role": "user",
                 "content": [
-                    content_block,
+                    cached_block,
                     {"type": "text", "text": prompt},
                 ],
             }
@@ -197,6 +228,32 @@ def get_tool_data(response):
     return None
 
 
+def normalize_mentions(data):
+    """
+    Coerce each entity's `mentions` into {text, page} objects. Older prompt
+    revisions (and occasional off-schema model output) return plain strings —
+    accepted here as {text: <string>, page: None} rather than rejected.
+    Returns True if anything was coerced.
+    """
+    coerced = False
+    for entity in data.get("entities", []) or []:
+        if not isinstance(entity, dict):
+            continue
+        mentions = entity.get("mentions")
+        if not isinstance(mentions, list):
+            continue
+        normalized = []
+        for m in mentions:
+            if isinstance(m, str):
+                normalized.append({"text": m, "page": None})
+                coerced = True
+            elif isinstance(m, dict) and isinstance(m.get("text"), str):
+                normalized.append({"text": m["text"], "page": m.get("page")})
+            # anything else (wrong shape entirely) is dropped rather than guessed at
+        entity["mentions"] = normalized
+    return coerced
+
+
 def normalize_lists(data):
     """
     If Claude forgot a list field (common when output is truncated),
@@ -212,6 +269,10 @@ def normalize_lists(data):
             warnings.append(f"missing `{key}` filled with empty list")
         elif not isinstance(data[key], list):
             pass
+
+    if normalize_mentions(data):
+        warnings.append("some `mentions` entries were plain strings, coerced to {text, page: null}")
+
     return data, warnings
 
 
