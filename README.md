@@ -7,12 +7,11 @@ Claude API, then visualizes them as an interactive graph.
 
 ## Usage
 
-These steps assume you have [Python](https://www.python.org/downloads/) installed and know how
-to open a terminal in this project's folder.
+These steps assume you have [Python](https://www.python.org/downloads/) installed.
 
 ### 1. Install the dependencies
 
-In the terminal, run:
+Open a terminal in this project's folder, or navigate to it in the terminal. In the terminal, run:
 
 ```bash
 pip install -r requirements.txt
@@ -70,7 +69,7 @@ interested in one document at a time.
 
 ### 6. View the results
 
-Open `visualizer/visualizer.html` by double-clicking it — it opens directly in your web
+Open `visualizer/visualizer.html` — it opens directly in your web
 browser, no installation needed. Then either drag-and-drop JSON file(s) from `output/` onto the
 page, or use the "Load JSON…" button to pick them.
 
